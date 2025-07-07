@@ -1,0 +1,130 @@
+---
+title: "Additive Hazard Model Fits on NWTSCO dataset"
+author: "Qikai Jiang"
+date: "2024-11-26"
+output: html_document
+---
+
+```{r}
+library(timereg)
+```
+
+```{r}
+library(addhazard)
+library(survival)
+```
+
+```{r}
+# Load nwtsco_cat from local file
+nwtsco_cat <- read.csv("C:/Users/12073/OneDrive/Desktop/nwtsco_cat.csv")
+
+# Load nwtsco_rel_to_death from local file
+nwtsco_rel_to_death <- read.csv("C:/Users/12073/OneDrive/Desktop/nwtsco_rel_to_death.csv")
+```
+
+```{r}
+#' Fit an Additive Aalen Hazard Model for a Subset of Data
+#'
+#' @description
+#' Fits a robust additive hazard model using the Aalen method for a specified subset of the data
+#' (filtered by study value) and prints a model summary.
+#'
+#' @param data A data frame containing the survival outcome, covariates, and a 'study' column.
+#' @param time A string indicating the name of the column that contains the survival/follow-up time.
+#' @param event A string indicating the name of the column that contains the event indicator 
+#'        (1 = event occurred, 0 = censored).
+#' @param covariates A character vector of variable names to include as predictors (categorical).
+#' @param study_value A specific value to filter the `study` column, selecting which study cohort to model.
+#'
+#' @return None (the function prints the summary of the fitted model).
+#' @examples
+#' fit_additive_model(data = my_data, time = "time", event = "status", 
+#'                    covariates = c("age_group", "stage"), study_value = 1)
+fit_additive_model <- function(data, time, event, covariates, study_value) {
+  
+  # Step 1: Create the model formula string for the survival analysis
+  # Format: Surv(time, event) ~ factor(cov1) + factor(cov2) + ...
+  formula_str <- paste0("Surv(", time, ", ", event, ") ~ ",
+                        paste0("factor(", covariates, ")", collapse = " + "))
+  
+  # Step 2: Convert the formula string into an actual formula object
+  model_formula <- as.formula(formula_str)
+  
+  # Step 3: Filter the input data to include only rows with the specified study value
+  data_subset <- subset(data, study == study_value)
+  
+  # Step 4: Fit the additive hazards model using the timereg::aalen function
+  # 'robust = TRUE' provides robust variance estimates, helpful for inference
+  fit <- aalen(model_formula, data = data_subset, robust = TRUE)
+  
+  # Step 5: Print a summary of the fitted model (includes coefficients, standard errors, etc.)
+  print(summary(fit))
+}
+```
+
+```{r}
+# Fit for Study 3, relapse to death
+fit_relapse_to_death_study3 <- fit_additive_model(
+  data = nwtsco_rel_to_death,
+  time = "time_diff",
+  event = "event_between",
+  covariates = c("age_group", "size_group", "stage", "histol"),
+  study_value = "3"
+)
+```
+
+```{r}
+# Fit for Study 4, relapse to death
+fit_relapse_to_death_study4 <- fit_additive_model(
+  data = nwtsco_rel_to_death,
+  time = "time_diff",
+  event = "event_between",
+  covariates = c("age_group", "size_group", "stage", "histol"),
+  study_value = "4"
+)
+```
+
+```{r}
+# Fit for Study 3, time to death
+fit_death_study3 <- fit_additive_model(
+  data = nwtsco_cat,
+  time = "tsur",
+  event = "dead",
+  covariates = c("age_group", "size_group", "stage", "histol"),
+  study_value = "3"
+)
+```
+
+```{r}
+# Fit for Study 4, time to death
+fit_death_study4 <- fit_additive_model(
+  data = nwtsco_cat,
+  time = "tsur",
+  event = "dead",
+  covariates = c("age_group", "size_group", "stage", "histol"),
+  study_value = "4"
+)
+```
+
+```{r}
+# Fit for Study 3, time to relapse
+fit_relapse_study3 <- fit_additive_model(
+  data = nwtsco_cat,
+  time = "trel",
+  event = "relaps",
+  covariates = c("age_group", "size_group", "stage", "histol"),
+  study_value = "3"
+)
+```
+
+```{r}
+# Fit for Study 4, time to relapse
+fit_relapse_study4 <- fit_additive_model(
+  data = nwtsco_cat,
+  time = "trel",
+  event = "relaps",
+  covariates = c("age_group", "size_group", "stage", "histol"),
+  study_value = "4"
+)
+```
+

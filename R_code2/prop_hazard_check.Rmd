@@ -1,0 +1,169 @@
+---
+title: "Proportional Hazard Assumption Check for Cox Model of NWTSCO dataset"
+author: "Qikai Jiang"
+date: "2024-11-26"
+output: html_document
+---
+
+```{r}
+# Load required libraries for modeling and data manipulation
+library(addhazard)  # Provides NWTSCO dataset and additive hazard modeling tools
+library(dplyr)      # For data wrangling
+library(survival)   # For Cox proportional hazards model and survival objects
+```
+
+```{r}
+# Load the NWTSCO dataset from the addhazard package
+data("nwtsco")
+```
+
+```{r}
+#' Categorize Continuous Variables: Age and Tumor Diameter
+#'
+#' @description
+#' Transforms continuous `age` and `tumdiam` variables into categorical groupings 
+#' for easier stratification and modeling.
+#'
+#' @param data A data frame that contains at least the `age` and `tumdiam` columns.
+#'
+#' @return A data frame with two new columns:
+#'   - `age_group`: Categorized age as "<2 yrs", "2–4 yrs", or ">4 yrs".
+#'   - `size_group`: Categorized tumor diameter as "<10 cm", "10–15 cm", or ">15 cm".
+#'
+#' @examples
+#' categorized_data <- categorize_cont(my_data)
+categorize_cont <- function(data) {
+  data %>%
+    mutate(
+      # Categorize age into 3 clinically meaningful groups:
+      # "<2 yrs", "2–4 yrs", ">4 yrs"
+      age_group = case_when(
+        age < 2 ~ "<2 yrs",                         # Infants/toddlers
+        age >= 2 & age <= 4 ~ "2–4 yrs",            # Early childhood
+        age > 4 ~ ">4 yrs",                         # Older children
+        TRUE ~ NA_character_                        # Missing or invalid age
+      ),
+      
+      # Categorize tumor diameter into 3 groups:
+      # "<10 cm", "10–15 cm", ">15 cm"
+      size_group = case_when(
+        tumdiam < 10 ~ "<10 cm",                    # Small tumors
+        tumdiam >= 10 & tumdiam <= 15 ~ "10–15 cm", # Medium tumors
+        tumdiam > 15 ~ ">15 cm",                    # Large tumors
+        TRUE ~ NA_character_                        # Missing or invalid diameter
+      )
+    )
+}
+```
+
+```{r}
+# Apply categorization function to the NWTSCO dataset
+nwtsco_cat <- categorize_cont(nwtsco)
+```
+
+```{r}
+# Create a subset of the data for patients who experienced relapse and died after relapse
+nwtsco_rel_to_death <- nwtsco_cat %>%
+  filter(relaps == 1 & tsur >= trel) %>%     # Include only those who relapsed and lived at least until relapse
+  mutate(
+    time_diff = tsur - trel,                # Calculate time from relapse to death
+    event_between = dead                    # Use death indicator for the post-relapse period
+  )
+```
+
+```{r}
+#' Fit Cox Model and Test Proportional Hazards Assumption
+#'
+#' @description
+#' This function fits a Cox proportional hazards model using specified covariates 
+#' (treated as categorical), and optionally stratifies by a variable. It then tests 
+#' the proportional hazards (PH) assumption using scaled Schoenfeld residuals via `cox.zph()`.
+#'
+#' @param data A data frame containing the survival data and covariates.
+#' @param time A string giving the name of the column that contains survival or follow-up time.
+#' @param event A string giving the name of the column indicating the event indicator 
+#'        (1 = event occurred, 0 = censored).
+#' @param predictors A character vector of covariate names to include in the model (treated as categorical).
+#' @param strata_var (Optional) A string specifying a variable to use for stratification (e.g., `study`).
+#'
+#' @return A list with two elements:
+#'   - `model`: The fitted Cox model object (`coxph`).
+#'   - `zph`: The result of the proportional hazards test (`cox.zph` object).
+#'
+#' @examples
+#' result <- run_cox_zph(data = my_data, time = "time", event = "status",
+#'                       predictors = c("age_group", "stage"), strata_var = "study")
+#' print(result$zph)
+run_cox_zph <- function(data, time, event, predictors, strata_var = NULL) {
+  
+  # Step 1: Construct the survival model formula dynamically
+  # Format: Surv(time, event) ~ factor(var1) + factor(var2) + ... [+ strata(strata_var)]
+  surv_formula <- as.formula(
+    paste0(
+      "Surv(", time, ", ", event, ") ~ ",
+      paste(paste0("factor(", predictors, ")"), collapse = " + "),
+      if (!is.null(strata_var)) paste0(" + strata(", strata_var, ")") else ""
+    )
+  )
+  
+  # Step 2: Fit the Cox proportional hazards model using the constructed formula
+  cox_model <- coxph(surv_formula, data = data)
+  
+  # Step 3: Use scaled Schoenfeld residuals to test the proportional hazards assumption
+  # This checks whether covariate effects change over time
+  cox_zph_result <- cox.zph(cox_model)
+  
+  # Step 4: Print the results of the proportional hazards test
+  # The output shows correlation and global p-value for time-varying effects
+  print(cox_zph_result)
+  
+  # Step 5: Return both the fitted model and the PH test result
+  return(list(model = cox_model, zph = cox_zph_result))
+}
+```
+
+```{r}
+# Run Cox PH model and test proportional hazards for time to death
+result_to_death <- run_cox_zph(
+  data = nwtsco_cat,
+  time = "tsur",                       # Survival time: time from diagnosis to death or censoring
+  event = "dead",                      # Event indicator: 1 = death, 0 = censored
+  predictors = c("age_group", "size_group", "histol", "stage"),  # Covariates of interest
+  strata_var = "study"                # Stratify by study (Study 3 vs Study 4)
+)
+```
+
+```{r}
+# Run Cox PH model and test proportional hazards for time to relapse
+result_to_relaps <- run_cox_zph(
+  data = nwtsco_cat,
+  time = "trel",
+  event = "relaps",
+  predictors = c("age_group", "size_group", "histol", "stage"),
+  strata_var = "study"
+)
+```
+
+```{r}
+# Run Cox PH model and test proportional hazards for time from relapse to death
+result_between <- run_cox_zph(
+  data = nwtsco_rel_to_death,
+  time = "time_diff",
+  event = "event_between",
+  predictors = c("age_group", "size_group", "histol", "stage"),
+  strata_var = "study"
+)
+```
+
+```{r}
+# Save nwtsco_cat to local
+write.csv(nwtsco_cat, "C:/Users/12073/OneDrive/Desktop/nwtsco_cat.csv", row.names = FALSE)
+```
+
+```{r}
+# Save nwtsco_rel_to_death to local
+write.csv(nwtsco_rel_to_death, "C:/Users/12073/OneDrive/Desktop/nwtsco_rel_to_death.csv", row.names = FALSE)
+```
+
+`
+

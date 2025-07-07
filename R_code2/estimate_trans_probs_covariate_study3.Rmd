@@ -1,0 +1,360 @@
+---
+title: "Showing State Occupancy Probabilities over Time for Multi-state Modeling of Additive Hazard Fits, Study3"
+author: "Qikai Jiang"
+date: "2024-11-29"
+output: html_document
+---
+
+```{r}
+# Load multi-state nwtsco datasets from state 1 to 2, state 1 to 3 and state 2 to 3
+data_12 <- read.csv("C:/Users/12073/OneDrive/Desktop/nwtsco_12.csv")
+data_13 <- read.csv("C:/Users/12073/OneDrive/Desktop/nwtsco_13.csv")
+data_23 <- read.csv("C:/Users/12073/OneDrive/Desktop/nwtsco_23.csv")
+```
+
+```{r}
+#' Fit an Additive Hazards Model for Transition Data (Start-Stop Format)
+#'
+#' @description
+#' This function fits an additive hazards model using the `aalen()` function from the `timereg` package,
+#' applied to transition data formatted in a (start, stop, event) structure. It subsets the data
+#' by a specified `study` value and includes specified covariates as categorical variables.
+#'
+#' @param data A data frame that contains the necessary columns: `start`, `stop`, `event`,
+#'             `study`, and the covariates used in the model.
+#' @param study_value The specific value of the `study` column to subset for model fitting.
+#' @param covariates A character vector of covariate names to include in the model. All will be treated
+#'                   as categorical using `factor()`. Defaults to common clinical variables:
+#'                   `"age_group"`, `"size_group"`, `"stage"`, and `"histol"`.
+#'
+#' @return A fitted `aalen` model object (of class `"aalen"`) containing cumulative hazard estimates
+#'         and robust standard errors.
+#'
+#' @importFrom timereg aalen
+#' @examples
+#' fit <- fit_addhazard_transition(data = mydata, study_value = 1)
+#' summary(fit)
+library(timereg)
+
+fit_addhazard_transition <- function(data, 
+                                     study_value, 
+                                     covariates = c("Age", "Diameter", "Stage", "Histology")) {
+  # Step 1: Subset the data for the specified study value
+  # Filters only the observations from the given 'study' group
+  data_subset <- subset(data, study == study_value)
+  
+  # Step 2: Construct the formula for the additive hazards model
+  # Format: Surv(start, stop, event) ~ factor(cov1) + factor(cov2) + ...
+  # The model uses start-stop format for time-dependent covariates or transitions
+  formula_str <- paste0("Surv(start, stop, event) ~ ",
+                        paste0("factor(", covariates, ")", collapse = " + "))
+  
+  # Step 3: Convert the formula string to an actual R formula object
+  model_formula <- as.formula(formula_str)
+  
+  # Step 4: Fit the additive hazards model using the aalen() function
+  # 'robust = TRUE' ensures robust variance estimation, useful when model assumptions are mildly violated
+  fit <- aalen(model_formula, data = data_subset, robust = TRUE)
+  
+  # Step 5: Return the fitted model for further inspection or plotting
+  return(fit)
+}
+```
+
+```{r}
+# Fit transition 1 → 2 for study 3
+fit_12_study3 <- fit_addhazard_transition(data = data_12, study_value = 3)
+
+# Fit transition 1 → 3 for study 3
+fit_13_study3 <- fit_addhazard_transition(data = data_13, study_value = 3)
+
+# Fit transition 2 → 3 for study 3
+fit_23_study3 <- fit_addhazard_transition(data = data_23, study_value = 3)
+```
+
+```{r}
+#' estimate_trans_probs_covariate
+#'
+#' Simulates state occupancy probabilities over time from a multi-state additive hazards model
+#' for a specified covariate profile using fitted cumulative hazard functions.
+#'
+#' @param fit_12 Fitted model object for transition 1 → 2 (e.g., healthy to relapse)
+#' @param fit_13 Fitted model object for transition 1 → 3 (e.g., healthy to death)
+#' @param fit_23 Fitted model object for transition 2 → 3 (e.g., relapse to death)
+#' @param covariate_profile Named vector specifying the covariate values (e.g., Age = "<2", Stage = 1)
+#' @param times Time grid for estimating state probabilities (default: 0 to 10 in steps of 0.1)
+#' @param n_sim Number of simulations for trajectory estimation (default: 1000)
+#' 
+#' @return A ggplot object showing state occupancy probabilities over time
+
+estimate_trans_probs_covariate <- function(fit_12, fit_13, fit_23,
+                                           covariate_profile,
+                                           times = seq(0, 10, by = 0.1),
+                                           n_sim = 1000) {
+
+  # Helper function to compute cumulative hazard based on the covariate profile
+  compute_cumhaz <- function(fit, cov_profile) {
+    cum_df <- as.data.frame(fit$cum)  # Extract cumulative hazard estimates
+    time_vec <- cum_df$time
+    cov_names <- colnames(cum_df)[colnames(cum_df) != "time"]
+    betas <- as.matrix(cum_df[, cov_names, drop = FALSE])  # Coefficient paths over time
+
+    # Initialize covariate effects vector to zeros (including all dummy vars)
+    cov_values <- rep(0, ncol(betas))
+    names(cov_values) <- cov_names
+
+    # Loop through each covariate in the profile
+    for (j in seq_along(cov_profile)) {
+      var_name <- names(cov_profile)[j]
+      value <- cov_profile[[j]]
+
+      # Look for matching dummy variable column for factor(var)[value]
+      pattern <- paste0("factor\\(", var_name, "\\).*", value)
+      matched_col <- grep(pattern, cov_names)
+
+      if (length(matched_col) > 0) {
+        cov_values[matched_col] <- 1  # Set 1 for matched dummy variable
+      } else {
+        # If no match, value is treated as reference level
+        message(sprintf("Variable '%s' with value '%s' treated as reference level.", var_name, value))
+      }
+    }
+
+    # Ensure intercept term is included
+    if ("(Intercept)" %in% colnames(betas)) {
+      cov_values["(Intercept)"] <- 1
+    }
+
+    # Multiply covariate vector by time-varying coefficients to get cumulative hazard
+    cumhaz_vec <- as.vector(betas %*% cov_values)
+
+    # Return cumulative hazard function interpolator
+    approxfun(time_vec, cumhaz_vec, method = "linear", rule = 2)
+  }
+
+  # Compute cumulative hazard functions for each transition
+  H12 <- compute_cumhaz(fit_12, covariate_profile)
+  H13 <- compute_cumhaz(fit_13, covariate_profile)
+  H23 <- compute_cumhaz(fit_23, covariate_profile)
+
+  # Simulate individual trajectories (n_sim times)
+  sim_results <- replicate(n_sim, {
+    T12_draw <- rexp(1)  # Exponential draw for transition 1→2
+    T13_draw <- rexp(1)  # Exponential draw for transition 1→3
+
+    # Determine transition time based on inverse of cumulative hazard
+    t12 <- tryCatch(uniroot(function(t) H12(t) - T12_draw, c(0, max(times)))$root, error = function(e) Inf)
+    t13 <- tryCatch(uniroot(function(t) H13(t) - T13_draw, c(0, max(times)))$root, error = function(e) Inf)
+
+    # Three possible paths: 1→2→3, 1→3, or remain in state 1
+    if (t12 < t13 && is.finite(t12)) {
+      T23_draw <- rexp(1)
+      t23 <- tryCatch(uniroot(function(t) H23(t) - T23_draw, c(t12, max(times)))$root, error = function(e) Inf)
+      return(c(relapse = t12, death = t23, path = "1→2→3"))
+    } else if (is.finite(t13)) {
+      return(c(relapse = NA, death = t13, path = "1→3"))
+    } else {
+      return(c(relapse = NA, death = NA, path = "1→1"))
+    }
+  })
+
+  # Format simulation output
+  sim_df <- as.data.frame(t(sim_results))
+  sim_df$relapse <- as.numeric(sim_df$relapse)
+  sim_df$death <- as.numeric(sim_df$death)
+  sim_df$path <- as.factor(sim_df$path)
+
+  # Estimate state occupancy probabilities at each time point
+  state_probs <- sapply(times, function(t) {
+    healthy <- sum(is.na(sim_df$relapse) & (is.na(sim_df$death) | sim_df$death > t)) / n_sim
+    relapse <- sum(!is.na(sim_df$relapse) & sim_df$relapse <= t & (is.na(sim_df$death) | sim_df$death > t)) / n_sim
+    dead <- sum(!is.na(sim_df$death) & sim_df$death <= t) / n_sim
+    c(Healthy = healthy, Relapse = relapse, Dead = dead)
+  })
+
+  # Reshape for plotting
+  state_df <- as.data.frame(t(state_probs))
+  state_df$time <- times
+  state_long <- tidyr::pivot_longer(state_df, cols = -time, names_to = "State", values_to = "Probability")
+
+  # Plot simulated state probabilities over time
+  library(ggplot2)
+  ggplot(state_long, aes(x = time, y = Probability, color = State)) +
+    geom_line(linewidth = 1.2) +
+    labs(
+      title = paste0("Simulated State Probabilities for Profile: ",
+                     paste(names(covariate_profile), covariate_profile, sep = "=", collapse = ", ")),
+      x = "Time", y = "Probability"
+    ) +
+    theme_minimal(base_size = 14) +
+    theme(legend.position = "bottom") +
+    scale_color_brewer(palette = "Dark2")
+}
+```
+
+```{r}
+# Define covariate profile for Profile 1 (reference group)
+# This profile represents a patient with all favorable characteristics:
+# - Age: <2 years (lowest age group)
+# - Tumor Diameter: <10 cm (smallest tumor group)
+# - Stage: 1 (earliest disease stage)
+# - Histology: 0 (coded as Favorable in the model, assuming 0 = reference group)
+cov_profile1 <- c(Age = "<2 yrs", Diameter = "<10 cm", Stage = 1, Histology = 0)
+
+# Estimate and plot state occupancy probabilities over time for the specified profile
+# using transition-specific cumulative hazard fits from Study 3.
+
+estimate_trans_probs_covariate(
+  fit_12 = fit_12_study3,         # Fitted model for transition: Healthy → Relapse
+  fit_13 = fit_13_study3,         # Fitted model for transition: Healthy → Death
+  fit_23 = fit_23_study3,         # Fitted model for transition: Relapse → Death
+  covariate_profile = cov_profile1,  # Covariate profile defined above
+  times = seq(0, 25, by = 0.1),      # Time grid over 25 years, in 0.1-year increments
+  n_sim = 5000                       # Number of simulated patient trajectories (increased for precision)
+)
+```
+
+```{r}
+# Define covariate profile for Profile 2 
+# This profile represents a patient with all favorable characteristics:
+# - Age: 2-4 years (middle age group)
+# - Tumor Diameter: 10-15 cm (middle tumor group)
+# - Stage: 2 (second disease stage)
+# - Histology: 0 (coded as Favorable in the model, assuming 0 = reference group)
+
+cov_profile2 <- c(Age = "2-4 yrs", Diameter = "10-15 cm", Stage = 2, Histology = 0)
+
+estimate_trans_probs_covariate(fit_12_study3, fit_13_study3, fit_23_study3,
+                               covariate_profile = cov_profile2,
+                               times = seq(0, 25, by = 0.1),
+                               n_sim = 5000)
+```
+```{r}
+# Define covariate profile for Profile 3 
+# This profile represents a patient with all favorable characteristics:
+# - Age: >4 years (oldest age group)
+# - Tumor Diameter: >15 cm (biggest tumor group)
+# - Stage: 2 (second disease stage)
+# - Histology: 0 (coded as Favorable in the model, assuming 0 = reference group)
+
+cov_profile3 <- c(Age = ">4 yrs", Diameter = ">15 cm", Stage = 2, Histology = 0)
+
+estimate_trans_probs_covariate(fit_12_study3, fit_13_study3, fit_23_study3,
+                               covariate_profile = cov_profile3,
+                               times = seq(0, 25, by = 0.1),
+                               n_sim = 5000)
+```
+
+```{r}
+# Define covariate profile for Profile 4 
+# This profile represents a patient with all favorable characteristics:
+# - Age: <2 years (earliest age group)
+# - Tumor Diameter: >15 cm (biggest tumor group)
+# - Stage: 3 (third disease stage)
+# - Histology: 0 (coded as Favorable in the model, assuming 0 = reference group)
+
+cov_profile4 <- c(Age = "<2 yrs", Diameter = ">15 cm", Stage = 3, Histology = 0)
+
+estimate_trans_probs_covariate(fit_12_study3, fit_13_study3, fit_23_study3,
+                               covariate_profile = cov_profile4,
+                               times = seq(0, 25, by = 0.1),
+                               n_sim = 5000)
+```
+```{r}
+# Define covariate profile for Profile 5 
+# This profile represents a patient with all favorable characteristics:
+# - Age: 2-4 years (middle age group)
+# - Tumor Diameter: >15 cm (biggest tumor group)
+# - Stage: 4 (worst disease stage)
+# - Histology: 0 (coded as Favorable in the model, assuming 0 = reference group)
+
+cov_profile5 <- c(Age = "2-4 yrs", Diameter = ">15 cm", Stage = 4, Histology = 0)
+
+estimate_trans_probs_covariate(fit_12_study3, fit_13_study3, fit_23_study3,
+                               covariate_profile = cov_profile5,
+                               times = seq(0, 25, by = 0.1),
+                               n_sim = 5000)
+```
+```{r}
+# Define covariate profile for Profile 6 
+# This profile represents a patient with all favorable characteristics:
+# - Age: >4 years (oldest age group)
+# - Tumor Diameter: 10-15 cm (middle tumor group)
+# - Stage: 1 (earliest disease stage)
+# - Histology: 1 (Unfavorable histology group)
+
+cov_profile6 <- c(Age = ">4 yrs", Diameter = "10-15 cm", Stage = 1, Histology = 1)
+
+estimate_trans_probs_covariate(fit_12_study3, fit_13_study3, fit_23_study3,
+                               covariate_profile = cov_profile6,
+                               times = seq(0, 25, by = 0.1),
+                               n_sim = 5000)
+```
+
+```{r}
+# Define covariate profile for Profile 7 
+# This profile represents a patient with all favorable characteristics:
+# - Age: >4 years (oldest age group)
+# - Tumor Diameter: <10 cm (smallest tumor group)
+# - Stage: 2 (second disease stage)
+# - Histology: 1 (Unfavorable histology group)
+
+cov_profile7 <- c(Age = ">4 yrs", Diameter = "<10 cm", Stage = 2, Histology = 1)
+
+estimate_trans_probs_covariate(fit_12_study3, fit_13_study3, fit_23_study3,
+                               covariate_profile = cov_profile7,
+                               times = seq(0, 25, by = 0.1),
+                               n_sim = 5000)
+```
+
+```{r}
+# Define covariate profile for Profile 8 
+# This profile represents a patient with all favorable characteristics:
+# - Age: 2-4 years (middle age group)
+# - Tumor Diameter: <10 cm (smallest tumor group)
+# - Stage: 3 (third disease stage)
+# - Histology: 1 (Unfavorable histology group)
+
+cov_profile8 <- c(Age = "2-4 yrs", Diameter = "<10 cm", Stage = 3, Histology = 1)
+
+estimate_trans_probs_covariate(fit_12_study3, fit_13_study3, fit_23_study3,
+                               covariate_profile = cov_profile8,
+                               times = seq(0, 25, by = 0.1),
+                               n_sim = 5000)
+```
+
+```{r}
+# Define covariate profile for Profile 9 
+# This profile represents a patient with all favorable characteristics:
+# - Age: <2 years (youngest age group)
+# - Tumor Diameter: 10-15 cm (middle tumor group)
+# - Stage: 4 (worst disease stage)
+# - Histology: 1 (Unfavorable histology group)
+
+cov_profile9 <- c(Age = "<2 yrs", Diameter = "10-15 cm", Stage = 4, Histology = 1)
+
+estimate_trans_probs_covariate(fit_12_study3, fit_13_study3, fit_23_study3,
+                               covariate_profile = cov_profile9,
+                               times = seq(0, 25, by = 0.1),
+                               n_sim = 5000)
+```
+
+```{r}
+# Define covariate profile for Profile 10 (worst profile)
+# This profile represents a patient with all favorable characteristics:
+# - Age: >4 years (worst age group)
+# - Tumor Diameter: >15 cm (biggest tumor group)
+# - Stage: 4 (worst disease stage)
+# - Histology: 1 (Unfavorable histology group)
+
+cov_profile10 <- c(Age = ">4 yrs", Diameter = ">15 cm", Stage = 4, Histology = 1)
+
+estimate_trans_probs_covariate(fit_12_study3, fit_13_study3, fit_23_study3,
+                               covariate_profile = cov_profile10,
+                               times = seq(0, 25, by = 0.1),
+                               n_sim = 5000)
+```
+
+
+
+

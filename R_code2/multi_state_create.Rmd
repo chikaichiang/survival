@@ -1,0 +1,59 @@
+---
+title: "Multi-state Modeling Creation"
+author: "Qikai Jiang"
+date: "2024-11-26"
+output: html_document
+---
+
+```{r}
+# Load nwtsco_cat from local file
+nwtsco_cat <- read.csv("C:/Users/12073/OneDrive/Desktop/nwtsco_cat.csv")
+```
+
+```{r}
+names(nwtsco_cat)[names(nwtsco_cat) == "age_group"] <- "Age"
+names(nwtsco_cat)[names(nwtsco_cat) == "histol"] <- "Histology"
+names(nwtsco_cat)[names(nwtsco_cat) == "stage"] <- "Stage"
+names(nwtsco_cat)[names(nwtsco_cat) == "size_group"] <- "Diameter"
+```
+
+```{r}
+#  Transition 1 → 2 (relapse before death):
+data_12 <- nwtsco_cat %>%
+  filter(trel <= tsur | relaps == 0) %>%  # Include all people where relapse time was observed or never occurred
+  mutate(
+    start = 0,
+    stop = pmin(trel, tsur),              # Time to relapse or censoring
+    event = ifelse(relaps == 1 & trel <= tsur & !(dead == 1 & trel == tsur), 1, 0)  # 1 if relapse occurred before death
+  )
+```
+
+```{r}
+# Transition 1 → 3 (direct to death):
+data_13 <- nwtsco_cat %>%
+  filter(trel <= tsur | relaps == 0) %>%  # Include direct relapse-death OR no relapse at all
+  mutate(
+    start = 0,
+    stop = tsur,
+    event = as.integer(relaps == 1 & dead == 1 & trel == tsur)  # 1 only for actual direct 1→3, 0 otherwise
+  )
+```
+
+```{r}
+# Transition 2 → 3 (death after relapse):
+data_23 <- nwtsco_cat %>%
+  filter(relaps == 1 & trel < tsur) %>%  # Patients who had relapse before censoring or death
+  mutate(
+    start = trel,
+    stop = tsur,
+    event = ifelse(dead == 1 & tsur > trel, 1, 0)  # 1 if died after relapse, else 0
+  )
+```
+
+```{r}
+# Save the created transition datasets to local
+write.csv(data_12, "C:/Users/12073/OneDrive/Desktop/nwtsco_12.csv", row.names = FALSE)
+write.csv(data_13, "C:/Users/12073/OneDrive/Desktop/nwtsco_13.csv", row.names = FALSE)
+write.csv(data_23, "C:/Users/12073/OneDrive/Desktop/nwtsco_23.csv", row.names = FALSE)
+```
+

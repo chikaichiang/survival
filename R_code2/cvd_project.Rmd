@@ -1,0 +1,236 @@
+---
+title: "cvd"
+author: "Qikai Jiang"
+date: "2025-06-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+data <- read.csv("C:/Users/12073/OneDrive/Desktop/data_cvd.csv", header = TRUE, stringsAsFactors = FALSE)
+```
+
+```{r}
+library(ggplot2)
+
+ggplot(data=data, aes(x = visit, y = age, group = id)) +
+  geom_line(alpha = 0.3) +
+  labs(title = "Cholesterol Trajectories Across Visits")
+
+```
+
+```{r}
+avg_ages <- data %>%
+  group_by(id) %>%
+  summarise(mean_age = mean(age, na.rm = TRUE))
+
+summary(avg_ages$mean_age)
+```
+```{r}
+library(dplyr)
+
+baseline_ages <- data %>%
+  group_by(id) %>%
+  filter(visit == min(visit)) %>%   # or `visit == 1` if coded that way
+  summarise(age = first(age))
+
+summary(baseline_ages$age)
+
+```
+```{r}
+within_sd <- data %>%
+  group_by(id) %>%
+  summarise(sd_female = sd(educ, na.rm = TRUE))
+
+summary(within_sd$sd_female)  # Summary of intra-individual variation
+
+```
+```{r}
+static_vars <- data %>%
+  group_by(id) %>%
+  summarise(female = first(female),
+            educ = first(educ),
+            baseline_age = first(age),
+            hei2010 = first(hei2010),
+            pag2008 = first(pag2008),
+            depr1 = first(depr1))  # optional: use baseline value
+
+```
+
+```{r}
+table(static_vars$female)
+table(static_vars$educ)
+summary(static_vars$baseline_age)
+summary(static_vars$hei2010)
+table(static_vars$pag2008)
+table(static_vars$depr1)
+```
+```{r}
+# 1253 individuals of non-identical alcohol use
+library(dplyr)
+
+data %>%
+  group_by(id) %>%
+  summarise(n_unique = n_distinct(alcuse)) %>%
+  filter(n_unique > 1)  # This gives IDs where the variable changed (should be 0 if truly static)
+```
+```{r}
+# 380 individuals of non-identical obese
+data %>%
+  group_by(id) %>%
+  summarise(n_unique = n_distinct(obese)) %>%
+  filter(n_unique > 1)  # This gives IDs where the variable changed (should be 0 if truly static)
+```
+```{r}
+# 1197 individuals of non-identical high cholesterol
+data %>%
+  group_by(id) %>%
+  summarise(n_unique = n_distinct(highchol)) %>%
+  filter(n_unique > 1)  # This gives IDs where the variable changed (should be 0 if truly static)
+```
+
+```{r}
+# 1043 individuals of non-identical high blood pressure
+data %>%
+  group_by(id) %>%
+  summarise(n_unique = n_distinct(highbp)) %>%
+  filter(n_unique > 1)  # This gives IDs where the variable changed (should be 0 if truly static)
+```
+
+```{r}
+# 521 individuals of non-identical smoking status
+data %>%
+  group_by(id) %>%
+  summarise(n_unique = n_distinct(smoker)) %>%
+  filter(n_unique > 1)  # This gives IDs where the variable changed (should be 0 if truly static)
+```
+
+```{r}
+# 374 individuals of non-identical diabetes
+data %>%
+  group_by(id) %>%
+  summarise(n_unique = n_distinct(diabetes)) %>%
+  filter(n_unique > 1)  # This gives IDs where the variable changed (should be 0 if truly static)
+```
+
+```{r}
+# Using base R split
+data_by_visit <- split(data, data$visit)
+
+data_visit1 <- data_by_visit[[1]]
+data_visit2 <- data_by_visit[[2]]
+data_visit3 <- data_by_visit[[3]]
+```
+
+```{r}
+mean(data_visit1$age)
+sd(data_visit1$age)
+```
+
+```{r}
+mean(data_visit2$age)
+sd(data_visit2$age)
+```
+
+```{r}
+mean(data_visit3$age)
+sd(data_visit3$age)
+```
+```{r}
+table(data_visit1$alcuse)
+```
+
+```{r}
+table(data_visit2$alcuse)
+```
+```{r}
+table(data_visit3$alcuse)
+```
+
+```{r}
+mean(data_visit1$bmi)
+sd(data_visit1$bmi)
+```
+
+```{r}
+mean(data_visit2$bmi)
+sd(data_visit2$bmi)
+```
+```{r}
+mean(data_visit3$bmi)
+sd(data_visit3$bmi)
+```
+
+```{r}
+table(data_visit1$obese)
+```
+
+```{r}
+table(data_visit2$obese)
+```
+
+```{r}
+table(data_visit3$obese)
+```
+
+```{r}
+table(data_visit1$highchol)
+```
+
+```{r}
+table(data_visit2$highchol)
+```
+
+```{r}
+table(data_visit3$highchol)
+```
+
+```{r}
+table(data_visit1$highbp)
+```
+```{r}
+table(data_visit2$highbp)
+```
+```{r}
+table(data_visit3$highbp)
+```
+
+```{r}
+table(data_visit1$smoker)
+```
+
+```{r}
+table(data_visit2$smoker)
+```
+
+```{r}
+table(data_visit3$smoker)
+```
+
+```{r}
+table(data_visit1$numrf)
+```
+```{r}
+mean(data_visit1$numrf)
+sd(data_visit1$numrf)
+```
+
+```{r}
+table(data_visit2$numrf)
+```
+```{r}
+mean(data_visit2$numrf)
+sd(data_visit2$numrf)
+```
+
+```{r}
+table(data_visit3$numrf)
+```
+
+```{r}
+mean(data_visit3$numrf)
+sd(data_visit3$numrf)
+```

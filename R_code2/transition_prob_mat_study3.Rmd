@@ -1,0 +1,426 @@
+---
+title: "Estimates time-dependent transition probability matrices (TPMs) for a given covariate profile, Study 3"
+author: "Qikai Jiang"
+date: "2024-11-30"
+output: html_document
+---
+
+```{r}
+library(timereg)
+library(survival)
+```
+
+```{r}
+# Load multi-state nwtsco datasets from state 1 to 2, state 1 to 3 and state 2 to 3
+data_12 <- read.csv("C:/Users/12073/OneDrive/Desktop/nwtsco_12.csv")
+data_13 <- read.csv("C:/Users/12073/OneDrive/Desktop/nwtsco_13.csv")
+data_23 <- read.csv("C:/Users/12073/OneDrive/Desktop/nwtsco_23.csv")
+```
+
+```{r}
+#' Fit an Additive Hazards Model for Transition Data (Start-Stop Format)
+#'
+#' @description
+#' This function fits an additive hazards model using the `aalen()` function from the `timereg` package,
+#' applied to transition data formatted in a (start, stop, event) structure.
+#'
+#' @param data A data frame containing `start`, `stop`, `event`, `study`, and covariates.
+#' @param study_value The value of the `study` column to filter on.
+#' @param covariates A character vector of covariate names (categorical, treated via `factor()`).
+#'
+#' @return A fitted `aalen` model object.
+#'
+#' @importFrom timereg aalen
+fit_addhazard_transition <- function(data, 
+                                     study_value, 
+                                     covariates = c("Age", "Diameter", "Stage", "Histology")) {
+  data_subset <- subset(data, study == study_value)
+  formula_str <- paste0("Surv(start, stop, event) ~ ",
+                        paste0("factor(", covariates, ")", collapse = " + "))
+  model_formula <- as.formula(formula_str)
+  fit <- aalen(model_formula, data = data_subset, robust = TRUE)
+  return(fit)
+}
+```
+
+```{r}
+# Fit transition 1 → 2 for study 3
+fit_12_study3 <- fit_addhazard_transition(data = data_12, study_value = 3)
+
+# Fit transition 1 → 3 for study 3
+fit_13_study3 <- fit_addhazard_transition(data = data_13, study_value = 3)
+
+# Fit transition 2 → 3 for study 3
+fit_23_study3 <- fit_addhazard_transition(data = data_23, study_value = 3)
+```
+
+```{r}
+simulate_state_probs <- function(fit_12, fit_13, fit_23, covariate_profile, start_state = 1, times) {
+  # Simulates the state occupancy probabilities at a given time, for a single covariate profile.
+  #
+  # Parameters:
+  # fit_12, fit_13, fit_23: Fitted additive hazard models for transitions 1→2, 1→3, and 2→3 respectively.
+  # covariate_profile: A data frame with a single row specifying covariate values (Age, Diameter, Stage, Histology).
+  # start_state: The state the subject starts in (1, 2, or 3). Defaults to 1.
+  # times: A vector of times at which to evaluate the probabilities (only first element is used in this function).
+  
+  # Create design matrix (1 row) from the covariate profile
+  X <- model.matrix(~ Age + Diameter + Stage + Histology, data = covariate_profile)
+
+  # Compute cumulative hazards for each transition at the specified time
+  cumhaz_12 <- get_cumhaz(fit_12, X, times)
+  cumhaz_13 <- get_cumhaz(fit_13, X, times)
+  cumhaz_23 <- get_cumhaz(fit_23, X, times)
+
+  # Transition probabilities depend on the start state
+  if (start_state == 1) {
+    # From state 1:
+    # S1: Probability of staying in state 1
+    S1  <- exp(-(cumhaz_12 + cumhaz_13))
+    # P12: Probability of transitioning to state 2
+    P12 <- (1 - exp(-cumhaz_12)) * exp(-cumhaz_13)
+    # P13: Probability of transitioning to state 3
+    P13 <- 1 - S1 - P12
+
+    # Ensure all probabilities are non-negative and sum to 1
+    probs <- c(S1, P12, P13)
+    probs <- pmax(0, probs)
+    probs <- probs / sum(probs)  # Normalize
+    return(probs)
+    
+  } else if (start_state == 2) {
+    # From state 2:
+    # S2: Probability of staying in state 2
+    S2  <- exp(-cumhaz_23)
+    # P23: Probability of transitioning to state 3
+    P23 <- 1 - S2
+
+    # Ensure valid probabilities
+    probs <- c(S2, P23)
+    probs <- pmax(0, probs)
+    probs <- probs / sum(probs)
+    return(probs)
+
+  } else if (start_state == 3) {
+    # From state 3 (absorbing): always stays in 3
+    return(c(1, 0, 0))
+  }
+}
+```
+
+```{r}
+get_cumhaz <- function(fit, X, times) {
+  # Computes cumulative hazard values from an additive hazards model at specified time(s) and covariate values.
+  #
+  # Parameters:
+  # fit: Fitted additive hazards model object (from `timereg` package).
+  # X: Design matrix row (numeric vector) for covariate values.
+  # times: Vector of times to extract cumulative hazard at.
+  
+  # Extract cumulative coefficient matrix from the model
+  cumhaz_data <- as.data.frame(fit$cum)
+  time_vec <- cumhaz_data$time  # Vector of time points
+  coef_names <- setdiff(names(cumhaz_data), "time")  # Coefficient column names
+  
+  # Extract matrix of cumulative coefficients (rows = time points, columns = covariates)
+  cumhaz_matrix <- as.matrix(cumhaz_data[, coef_names])
+  
+  # Initialize vector to store cumulative hazard values at each target time
+  cumhaz_at_times <- numeric(length(times))
+  
+  for (i in seq_along(times)) {
+    t <- times[i]
+    # Find index of the last time point in model that is less than or equal to t
+    idx <- max(which(time_vec <= t))
+    if (length(idx) == 0 || is.infinite(idx)) {
+      # If no valid index found, assign cumulative hazard = 0
+      cumhaz_at_times[i] <- 0
+    } else {
+      # Multiply covariate vector X by cumulative coefficients at that time
+      beta_t <- cumhaz_matrix[idx, ]
+      cumhaz_at_times[i] <- sum(X * beta_t)
+    }
+  }
+  
+  return(cumhaz_at_times)  # Return vector of cumulative hazard values
+}
+```
+
+
+```{r}
+estimate_tpm <- function(fit_12, fit_13, fit_23, times, covariate_profile) {
+  # Estimates time-dependent transition probability matrices (TPMs) for a given covariate profile.
+  #
+  # Parameters:
+  # fit_12, fit_13, fit_23: Fitted additive hazard models for transitions 1→2, 1→3, and 2→3 respectively.
+  # times: A vector of time points at which to estimate the transition matrices.
+  # covariate_profile: A data frame with one row specifying the covariate values for the subject.
+  
+  TPM_list <- list()  # Initialize empty list to store TPMs for each time
+
+  for (t in times) {
+    # Compute row of transition probabilities from state 1 at time t
+    probs_start1 <- simulate_state_probs(fit_12, fit_13, fit_23, covariate_profile, start_state = 1, times = t)
+    # Compute row of transition probabilities from state 2 at time t
+    probs_start2 <- simulate_state_probs(fit_12, fit_13, fit_23, covariate_profile, start_state = 2, times = t)
+
+    # Create 3x3 transition probability matrix for time t
+    TPM_t <- matrix(0, nrow = 3, ncol = 3)
+    TPM_t[1, ] <- probs_start1         # Row for state 1 transitions
+    TPM_t[2, 2:3] <- probs_start2      # Row for state 2 transitions (only to 2 and 3)
+    TPM_t[3, 3] <- 1                   # State 3 is absorbing
+
+    # Store matrix in list, named by time point
+    TPM_list[[as.character(t)]] <- TPM_t
+  }
+
+  return(TPM_list)  # Return list of TPMs
+}
+```
+
+```{r}
+# Define a single covariate profile for which we want to estimate transition probabilities
+covariate_profile <- data.frame(
+  Age = factor("<2 yrs", levels = c("<2 yrs", "2–4 yrs", ">4 yrs")),        # Age group: "<2 yrs"
+  Diameter = factor("<10 cm", levels = c("<10 cm", "10–15 cm", ">15 cm")), # Tumor diameter group: "<10 cm"
+  Stage = factor(1, levels = c(1, 2, 3, 4)),                                # Cancer stage: Stage 1
+  Histology = factor(0, levels = c(0, 1))                                   # Histology type: 0 (e.g., favorable histology)
+)
+
+# Estimate the time-dependent transition probability matrices (TPMs) for the specified covariate profile
+# Using models fitted for a specific study (study 3 in this case), and times from 0 to 25 (e.g., months)
+tpm_list <- estimate_tpm(
+  fit_12_study3,                 # Model for transition from state 1 to state 2
+  fit_13_study3,                 # Model for transition from state 1 to state 3
+  fit_23_study3,                 # Model for transition from state 2 to state 3
+  times = seq(0, 25, by = 1),    # Sequence of time points at which to estimate TPMs (e.g., 0 to 25 months, by 1 month)
+  covariate_profile = covariate_profile  # The profile for which to compute transition probabilities
+)
+```
+
+```{r}
+tpm_list$`1`
+tpm_list$`2`
+tpm_list$`3`
+tpm_list$`5`
+tpm_list$`8`
+tpm_list$`10`
+tpm_list$`15`
+tpm_list$`20`
+```
+```{r}
+covariate_profile <- data.frame(
+  Age = factor("2–4 yrs", levels = c("<2 yrs", "2–4 yrs", ">4 yrs")),
+  Diameter = factor("10–15 cm", levels = c("<10 cm", "10–15 cm", ">15 cm")),
+  Stage = factor(2, levels = c(1, 2, 3, 4)),
+  Histology = factor(0, levels = c(0, 1))
+)
+
+# Estimate TPMs for each time
+tpm_list <- estimate_tpm(fit_12_study3, fit_13_study3, fit_23_study3,
+                         times = seq(0, 25, by = 1),
+                         covariate_profile = covariate_profile)
+```
+
+```{r}
+tpm_list$`1`
+tpm_list$`2`
+tpm_list$`3`
+tpm_list$`5`
+tpm_list$`8`
+tpm_list$`10`
+tpm_list$`15`
+tpm_list$`20`
+```
+```{r}
+covariate_profile <- data.frame(
+  Age = factor(">4 yrs", levels = c("<2 yrs", "2–4 yrs", ">4 yrs")),
+  Diameter = factor(">15 cm", levels = c("<10 cm", "10–15 cm", ">15 cm")),
+  Stage = factor(2, levels = c(1, 2, 3, 4)),
+  Histology = factor(0, levels = c(0, 1))
+)
+
+# Estimate TPMs for each time
+tpm_list <- estimate_tpm(fit_12_study3, fit_13_study3, fit_23_study3,
+                         times = seq(0, 25, by = 1),
+                         covariate_profile = covariate_profile)
+```
+
+```{r}
+tpm_list$`1`
+tpm_list$`2`
+tpm_list$`3`
+tpm_list$`5`
+tpm_list$`8`
+tpm_list$`10`
+tpm_list$`15`
+tpm_list$`20`
+```
+```{r}
+covariate_profile <- data.frame(
+  Age = factor("<2 yrs", levels = c("<2 yrs", "2–4 yrs", ">4 yrs")),
+  Diameter = factor(">15 cm", levels = c("<10 cm", "10–15 cm", ">15 cm")),
+  Stage = factor(3, levels = c(1, 2, 3, 4)),
+  Histology = factor(0, levels = c(0, 1))
+)
+
+# Estimate TPMs for each time
+tpm_list <- estimate_tpm(fit_12_study3, fit_13_study3, fit_23_study3,
+                         times = seq(0, 25, by = 1),
+                         covariate_profile = covariate_profile)
+```
+
+```{r}
+tpm_list$`1`
+tpm_list$`2`
+tpm_list$`3`
+tpm_list$`5`
+tpm_list$`8`
+tpm_list$`10`
+tpm_list$`15`
+tpm_list$`20`
+```
+```{r}
+covariate_profile <- data.frame(
+  Age = factor("2–4 yrs", levels = c("<2 yrs", "2–4 yrs", ">4 yrs")),
+  Diameter = factor(">15 cm", levels = c("<10 cm", "10–15 cm", ">15 cm")),
+  Stage = factor(4, levels = c(1, 2, 3, 4)),
+  Histology = factor(0, levels = c(0, 1))
+)
+
+# Estimate TPMs for each time
+tpm_list <- estimate_tpm(fit_12_study3, fit_13_study3, fit_23_study3,
+                         times = seq(0, 25, by = 1),
+                         covariate_profile = covariate_profile)
+```
+
+```{r}
+tpm_list$`1`
+tpm_list$`2`
+tpm_list$`3`
+tpm_list$`5`
+tpm_list$`8`
+tpm_list$`10`
+tpm_list$`15`
+tpm_list$`20`
+```
+```{r}
+covariate_profile <- data.frame(
+  Age = factor(">4 yrs", levels = c("<2 yrs", "2–4 yrs", ">4 yrs")),
+  Diameter = factor("10–15 cm", levels = c("<10 cm", "10–15 cm", ">15 cm")),
+  Stage = factor(1, levels = c(1, 2, 3, 4)),
+  Histology = factor(1, levels = c(0, 1))
+)
+
+# Estimate TPMs for each time
+tpm_list <- estimate_tpm(fit_12_study3, fit_13_study3, fit_23_study3,
+                         times = seq(0, 25, by = 1),
+                         covariate_profile = covariate_profile)
+```
+
+```{r}
+tpm_list$`1`
+tpm_list$`2`
+tpm_list$`3`
+tpm_list$`5`
+tpm_list$`8`
+tpm_list$`10`
+tpm_list$`15`
+tpm_list$`18`
+```
+```{r}
+covariate_profile <- data.frame(
+  Age = factor(">4 yrs", levels = c("<2 yrs", "2–4 yrs", ">4 yrs")),
+  Diameter = factor("<10 cm", levels = c("<10 cm", "10–15 cm", ">15 cm")),
+  Stage = factor(2, levels = c(1, 2, 3, 4)),
+  Histology = factor(1, levels = c(0, 1))
+)
+
+# Estimate TPMs for each time
+tpm_list <- estimate_tpm(fit_12_study3, fit_13_study3, fit_23_study3,
+                         times = seq(0, 25, by = 1),
+                         covariate_profile = covariate_profile)
+```
+
+```{r}
+tpm_list$`1`
+tpm_list$`2`
+tpm_list$`3`
+tpm_list$`5`
+tpm_list$`8`
+tpm_list$`10`
+tpm_list$`15`
+tpm_list$`20`
+```
+```{r}
+covariate_profile <- data.frame(
+  Age = factor("2–4 yrs", levels = c("<2 yrs", "2–4 yrs", ">4 yrs")),
+  Diameter = factor("<10 cm", levels = c("<10 cm", "10–15 cm", ">15 cm")),
+  Stage = factor(3, levels = c(1, 2, 3, 4)),
+  Histology = factor(1, levels = c(0, 1))
+)
+
+# Estimate TPMs for each time
+tpm_list <- estimate_tpm(fit_12_study3, fit_13_study3, fit_23_study3,
+                         times = seq(0, 25, by = 1),
+                         covariate_profile = covariate_profile)
+```
+
+```{r}
+tpm_list$`1`
+tpm_list$`2`
+tpm_list$`3`
+tpm_list$`5`
+tpm_list$`8`
+tpm_list$`10`
+tpm_list$`15`
+tpm_list$`20`
+```
+```{r}
+covariate_profile <- data.frame(
+  Age = factor("<2 yrs", levels = c("<2 yrs", "2–4 yrs", ">4 yrs")),
+  Diameter = factor("10–15 cm", levels = c("<10 cm", "10–15 cm", ">15 cm")),
+  Stage = factor(4, levels = c(1, 2, 3, 4)),
+  Histology = factor(1, levels = c(0, 1))
+)
+
+# Estimate TPMs for each time
+tpm_list <- estimate_tpm(fit_12_study3, fit_13_study3, fit_23_study3,
+                         times = seq(0, 25, by = 1),
+                         covariate_profile = covariate_profile)
+```
+
+```{r}
+tpm_list$`1`
+tpm_list$`2`
+tpm_list$`3`
+tpm_list$`5`
+tpm_list$`8`
+tpm_list$`10`
+tpm_list$`15`
+tpm_list$`20`
+```
+```{r}
+covariate_profile <- data.frame(
+  Age = factor(">4 yrs", levels = c("<2 yrs", "2–4 yrs", ">4 yrs")),
+  Diameter = factor(">15 cm", levels = c("<10 cm", "10–15 cm", ">15 cm")),
+  Stage = factor(4, levels = c(1, 2, 3, 4)),
+  Histology = factor(1, levels = c(0, 1))
+)
+
+# Estimate TPMs for each time
+tpm_list <- estimate_tpm(fit_12_study3, fit_13_study3, fit_23_study3,
+                         times = seq(0, 25, by = 1),
+                         covariate_profile = covariate_profile)
+```
+
+```{r}
+tpm_list$`1`
+tpm_list$`2`
+tpm_list$`3`
+tpm_list$`5`
+tpm_list$`8`
+tpm_list$`10`
+tpm_list$`15`
+tpm_list$`20`
+```

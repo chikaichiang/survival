@@ -1,0 +1,112 @@
+---
+title: "Multi-state Modeling Fit Using Additive Hazard Models"
+author: "Qikai Jiang"
+date: "2024-11-28"
+output: html_document
+---
+
+```{r}
+library(timereg)
+```
+
+```{r}
+# Load multi-state nwtsco datasets from state 1 to 2, state 1 to 3 and state 2 to 3
+data_12 <- read.csv("C:/Users/12073/OneDrive/Desktop/nwtsco_12.csv")
+data_13 <- read.csv("C:/Users/12073/OneDrive/Desktop/nwtsco_13.csv")
+data_23 <- read.csv("C:/Users/12073/OneDrive/Desktop/nwtsco_23.csv")
+```
+
+```{r}
+#' Fit an Additive Hazards Model for Transition Data (Start-Stop Format)
+#'
+#' @description
+#' This function fits an additive hazards model using the `aalen()` function from the `timereg` package,
+#' applied to transition data formatted in a (start, stop, event) structure. It subsets the data
+#' by a specified `study` value and includes specified covariates as categorical variables.
+#'
+#' @param data A data frame that contains the necessary columns: `start`, `stop`, `event`,
+#'             `study`, and the covariates used in the model.
+#' @param study_value The specific value of the `study` column to subset for model fitting.
+#' @param covariates A character vector of covariate names to include in the model. All will be treated
+#'                   as categorical using `factor()`. Defaults to common clinical variables:
+#'                   `"age_group"`, `"size_group"`, `"stage"`, and `"histol"`.
+#'
+#' @return A fitted `aalen` model object (of class `"aalen"`) containing cumulative hazard estimates
+#'         and robust standard errors.
+#'
+#' @importFrom timereg aalen
+#' @examples
+#' fit <- fit_addhazard_transition(data = mydata, study_value = 1)
+#' summary(fit)
+library(timereg)
+
+fit_addhazard_transition <- function(data, 
+                                     study_value, 
+                                     covariates = c("age_group", "size_group", "stage", "histol")) {
+  # Step 1: Subset the data for the specified study value
+  # Filters only the observations from the given 'study' group
+  data_subset <- subset(data, study == study_value)
+  
+  # Step 2: Construct the formula for the additive hazards model
+  # Format: Surv(start, stop, event) ~ factor(cov1) + factor(cov2) + ...
+  # The model uses start-stop format for time-dependent covariates or transitions
+  formula_str <- paste0("Surv(start, stop, event) ~ ",
+                        paste0("factor(", covariates, ")", collapse = " + "))
+  
+  # Step 3: Convert the formula string to an actual R formula object
+  model_formula <- as.formula(formula_str)
+  
+  # Step 4: Fit the additive hazards model using the aalen() function
+  # 'robust = TRUE' ensures robust variance estimation, useful when model assumptions are mildly violated
+  fit <- aalen(model_formula, data = data_subset, robust = TRUE)
+  
+  # Step 5: Return the fitted model for further inspection or plotting
+  return(fit)
+}
+```
+
+```{r}
+# Fit transition 1 → 2 for study 3
+fit_12_study3 <- fit_addhazard_transition(data = data_12, study_value = 3)
+
+# Fit transition 1 → 3 for study 3
+fit_13_study3 <- fit_addhazard_transition(data = data_13, study_value = 3)
+
+# Fit transition 2 → 3 for study 3
+fit_23_study3 <- fit_addhazard_transition(data = data_23, study_value = 3)
+```
+
+```{r}
+# Fit transition 1 → 2 for study 4
+fit_12_study4 <- fit_addhazard_transition(data = data_12, study_value = 4)
+
+# Fit transition 1 → 3 for study 4
+fit_13_study4 <- fit_addhazard_transition(data = data_13, study_value = 4)
+
+# Fit transition 2 → 3 for study 4
+fit_23_study4 <- fit_addhazard_transition(data = data_23, study_value = 4)
+```
+
+```{r}
+summary(fit_12_study3)
+```
+
+```{r}
+summary(fit_12_study4)
+```
+
+```{r}
+summary(fit_13_study3)
+```
+
+```{r}
+summary(fit_13_study4)
+```
+
+```{r}
+summary(fit_23_study3)
+```
+
+```{r}
+summary(fit_23_study4)
+```

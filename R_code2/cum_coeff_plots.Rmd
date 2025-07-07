@@ -1,0 +1,177 @@
+---
+title: "Cumulative Coefficient Plot for Additive Hazard Fit"
+author: "Qikai Jiang"
+date: "2024-11-26"
+output: html_document
+---
+
+```{r}
+library(addhazard)
+library(survival)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+```
+
+```{r}
+# Load nwtsco_cat from local file
+nwtsco_cat <- read.csv("C:/Users/12073/OneDrive/Desktop/nwtsco_cat.csv")
+
+# Load nwtsco_rel_to_death from local file
+nwtsco_rel_to_death <- read.csv("C:/Users/12073/OneDrive/Desktop/nwtsco_rel_to_death.csv")
+```
+
+```{r}
+#' Plot cumulative regression functions using the additive Aalen model
+#'
+#' @param data A data frame containing survival data, covariates, and a 'study' column.
+#' @param time A string naming the column representing survival or follow-up time.
+#' @param event A string naming the column representing the event indicator (1 = event occurred, 0 = censored).
+#' @param covariates A character vector of covariate names to include in the model (categorical variables).
+#' @param study_value A specific value from the 'study' column to subset the data for plotting.
+#' @param title_suffix A string to be used as a prefix in the plot title (e.g., "Time to Relapse").
+#'
+#' @return A cumulative coefficient plot is printed, and the fitted Aalen model object is returned invisibly.
+#' @importFrom timereg aalen
+#' @importFrom tidyr pivot_longer
+#' @importFrom dplyr left_join mutate
+#' @importFrom ggplot2 ggplot aes geom_line geom_ribbon labs theme_minimal theme guides guide_legend
+cum_coeff_plots <- function(data, time, event, covariates, study_value, title_suffix) {
+
+  # Step 1: Create the model formula string
+  # Format: Surv(time, event) ~ factor(covariate1) + factor(covariate2) + ...
+  formula_str <- paste0("Surv(", time, ", ", event, ") ~ ",
+                        paste0("factor(", covariates, ")", collapse = " + "))
+  model_formula <- as.formula(formula_str)
+
+  # Step 2: Subset the dataset to include only rows from the specified study
+  data_subset <- subset(data, study == study_value)
+
+  # Step 3: Fit the additive Aalen model with robust standard errors
+  fit <- aalen(model_formula, data = data_subset, robust = TRUE)
+
+  # Step 4: Extract cumulative coefficients from model and add time column
+  coef_df <- as.data.frame(fit$cum)
+  coef_df$time <- fit$cum[, "time"]
+
+  # Step 5: Reshape coefficient data to long format (one row per time-covariate pair)
+  coef_long <- coef_df %>%
+    pivot_longer(cols = -time, names_to = "Covariate", values_to = "Cumulative_Effect")
+
+  # Step 6: Extract and reshape variance estimates, then compute standard errors
+  se_df <- as.data.frame(fit$var.cum)
+  se_df$time <- fit$cum[, "time"]
+
+  se_long <- se_df %>%
+    pivot_longer(cols = -time, names_to = "Covariate", values_to = "Variance") %>%
+    mutate(SE = sqrt(Variance))
+
+  # Step 7: Merge coefficient and SE data, compute 95% confidence intervals
+  plot_df <- left_join(coef_long, se_long[, c("time", "Covariate", "SE")], by = c("time", "Covariate")) %>%
+    mutate(
+      lower = Cumulative_Effect - 2 * SE,  # 95% lower bound
+      upper = Cumulative_Effect + 2 * SE   # 95% upper bound
+    )
+
+  # Step 8: Rename covariates for better display in the legend
+  plot_df$Covariate <- recode(plot_df$Covariate,
+    "(Intercept)" = "Intercept",
+    "factor(age_group)2–4 yrs" = "Age: 2–4 yrs",
+    "factor(age_group)>4 yrs" = "Age: >4 yrs",
+    "factor(size_group)10–15 cm" = "Diameter: 10–15 cm",
+    "factor(size_group)>15 cm" = "Diameter: >15 cm",
+    "factor(stage)2" = "Stage: 2",
+    "factor(stage)3" = "Stage: 3",
+    "factor(stage)4" = "Stage: 4",
+    "factor(histol)1" = "Histology: Unfavorable"
+  )
+
+  # Step 9: Build the cumulative effect plot using ggplot2
+  p <- ggplot(plot_df, aes(x = time, y = Cumulative_Effect, color = Covariate)) +
+    geom_line(linewidth = 1) +  # Draw cumulative effect curves
+    geom_ribbon(aes(ymin = lower, ymax = upper, fill = Covariate), alpha = 0.2, color = NA) +  # Confidence bands
+    labs(
+      title = paste(title_suffix, " — Additive Aalen Model Study ", study_value),
+      x = "Time",
+      y = "Cumulative Regression Function B(t)"
+    ) +
+    theme_minimal(base_size = 13) +  # Clean theme
+    theme(legend.position = "bottom") +
+    guides(
+      color = guide_legend(nrow = 3, byrow = TRUE),
+      fill = guide_legend(nrow = 3, byrow = TRUE)
+    )
+
+  # Step 10: Display the plot
+  print(p)
+
+  # Step 11: Return the model object invisibly (useful for diagnostics or further analysis)
+  invisible(fit)
+}
+```
+
+```{r}
+cum_coeff_plots(
+  data = nwtsco_cat,
+  time = "trel",
+  event = "relaps",
+  covariates = c("age_group", "size_group", "stage", "histol"),
+  study_value = "3",
+  title_suffix = "Time to Relapse"
+)
+```
+
+```{r}
+cum_coeff_plots(
+  data = nwtsco_cat,
+  time = "trel",
+  event = "relaps",
+  covariates = c("age_group", "size_group", "stage", "histol"),
+  study_value = "4",
+  title_suffix = "Time to Relapse"
+)
+```
+
+```{r}
+cum_coeff_plots(
+  data = nwtsco_cat,
+  time = "tsur",
+  event = "dead",
+  covariates = c("age_group", "size_group", "stage", "histol"),
+  study_value = "3",
+  title_suffix = "Time to Death"
+)
+```
+
+```{r}
+cum_coeff_plots(
+  data = nwtsco_cat,
+  time = "tsur",
+  event = "dead",
+  covariates = c("age_group", "size_group", "stage", "histol"),
+  study_value = "4",
+  title_suffix = "Time to Death"
+)
+```
+
+```{r}
+cum_coeff_plots(
+  data = nwtsco_rel_to_death,
+  time = "time_diff",
+  event = "event_between",
+  covariates = c("age_group", "size_group", "stage", "histol"),
+  study_value = "3",
+  title_suffix = "Time between Relapse and Death"
+)
+```
+
+```{r}
+cum_coeff_plots(
+  data = nwtsco_rel_to_death,
+  time = "time_diff",
+  event = "event_between",
+  covariates = c("age_group", "size_group", "stage", "histol"),
+  study_value = "4",
+  title_suffix = "Time between Relapse and Death"
+)
+```
